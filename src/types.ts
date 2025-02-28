@@ -35,3 +35,52 @@ export interface StreamingPreferences {
   autoGainControl: boolean;
   stereoMode: boolean;
 }
+
+export interface AudioFile {
+  id: string;
+  user_id: string;
+  title: string;
+  description?: string;
+  s3_key: string;
+  requires_approval: boolean;
+  approved: boolean;
+  approved_by?: string;
+  approved_at?: string;
+  share_id: string;
+  created_at: string;
+}
+
+export interface AudioComment {
+  id: string;
+  file_id: string;
+  user_id: string;
+  timestamp: number;
+  text: string;
+  created_at: string;
+  user?: {
+    name: string;
+    avatar_url?: string;
+  };
+}
+
+export interface AudioFileUploadMetadata {
+  title: string;
+  description?: string;
+  requiresApproval?: boolean;
+}
+
+export interface ContentType {
+  type: 'stream' | 'file';
+  id: string;
+}
+
+export interface BroadcasterProfile {
+  id: string;
+  user_id: string;
+  name: string;
+  bio: string;
+  avatar_url: string;
+  role: 'user' | 'admin';
+  created_at: string;
+  updated_at: string;
+}

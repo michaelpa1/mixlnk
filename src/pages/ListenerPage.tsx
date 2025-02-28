@@ -1,8 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { Play, Pause, Share2, Volume2, Loader2, AlertCircle } from 'lucide-react';
 import { AudioLevelMeter } from '../components/AudioLevelMeter';
+import { AudioFilePlayer } from '../components/AudioFilePlayer';
 import { streamingService } from '../services/StreamingService';
+import { audioStreaming } from '../services/AudioStreamingService';
+import { s3Service } from '../services/S3Service';
+import { ContentType } from '../types';
 
 function formatTime(seconds: number): string {
   const mins = Math.floor(seconds / 60);
@@ -11,17 +15,28 @@ function formatTime(seconds: number): string {
 }
 
 export function ListenerPage() {
-  const { streamId } = useParams<{ streamId: string }>();
+  const { id } = useParams<{ id: string }>();
+  const location = useLocation();
   const navigate = useNavigate();
+  
+  // Generic state
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [contentType, setContentType] = useState<ContentType | null>(null);
+  
+  // Live stream state
   const [isPlaying, setIsPlaying] = useState(false);
   const [volume, setVolume] = useState(0.7);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [error, setError] = useState<string | null>(null);
   const [mediaStream, setMediaStream] = useState<MediaStream | null>(null);
-  const [loading, setLoading] = useState(true);
+  
+  // Audio file state
+  const [audioFile, setAudioFile] = useState<any>(null);
+  const [fileUrl, setFileUrl] = useState<string | null>(null);
+  
   const audioRef = useRef<HTMLAudioElement>(null);
-  const [broadcasterInfo] = useState({
+  const [broadcasterInfo, setBroadcasterInfo] = useState({
     name: 'MPA Creative',
     startDate: 'July 9, 2023',
     description: 'MPA Creative is the studio of Michael Pearson-Adams. He focuses on producing pop songs for Smurfs and Teletubbies mostly, but occasionally niches his talents to composing songs for the Wiggles.',
@@ -29,54 +44,95 @@ export function ListenerPage() {
     listeners: 56
   });
 
+  // Determine content type from URL and load appropriate content
   useEffect(() => {
-    let mounted = true;
+    if (!id) {
+      setError('Invalid ID');
+      setLoading(false);
+      return;
+    }
 
-    const connectToStream = async () => {
-      if (!streamId) {
-        setError('Invalid stream ID');
-        setLoading(false);
-        return;
-      }
-
+    const isStreamRoute = location.pathname.startsWith('/stream/');
+    const isFileRoute = location.pathname.startsWith('/listen/');
+    
+    const loadContent = async () => {
       try {
-        const stream = await streamingService.connectToStream(streamId);
-        if (mounted) {
-          setMediaStream(stream);
-          setIsPlaying(true);
-          setLoading(false);
+        if (isStreamRoute) {
+          // Add debugging
+          console.log('Attempting to connect to stream with ID:', id);
+          
+          try {
+            console.log('ListenerPage - Using audioStreaming service to connect');
+            
+            // Try to connect to live stream using audioStreaming service
+            const stream = await audioStreaming.connectToStream(id);
+            console.log('Stream connection successful');
+            setMediaStream(stream);
+            setIsPlaying(true);
+            setContentType({ type: 'stream', id });
+          } catch (connectionError) {
+            console.error('Stream connection error details:', connectionError);
+            throw connectionError; // Rethrow to be caught by the outer catch
+          }
+        } else if (isFileRoute) {
+          // Try to load audio file
+          const fileData = await s3Service.getFileByShareId(id);
+          setAudioFile(fileData);
+          setFileUrl(fileData.url);
+          
+          // Update broadcaster info if available
+          if (fileData.broadcaster_profiles && fileData.broadcaster_profiles.length > 0) {
+            const profile = fileData.broadcaster_profiles[0];
+            setBroadcasterInfo(prev => ({
+              ...prev,
+              name: profile.name || prev.name,
+              currentTrack: fileData.title,
+              description: fileData.description || prev.description
+            }));
+          }
+          
+          setContentType({ type: 'file', id });
+        } else {
+          throw new Error('Invalid content type');
         }
       } catch (err) {
-        if (!mounted) return;
-        const errorMessage = err instanceof Error ? err.message : 'Failed to connect to stream';
+        const errorMessage = err instanceof Error ? err.message : 'Failed to load content';
         setError(errorMessage);
-        setLoading(false);
         
-        if (errorMessage.includes('Stream not found') || errorMessage.includes('Stream has ended')) {
+        if (errorMessage.includes('Stream not found') || 
+            errorMessage.includes('Stream has ended') ||
+            errorMessage.includes('File not found')) {
           setTimeout(() => navigate('/'), 3000);
         }
+      } finally {
+        setLoading(false);
       }
     };
 
-    connectToStream();
+    loadContent();
 
     return () => {
-      mounted = false;
+      // Clean up resources
       if (mediaStream) {
         mediaStream.getTracks().forEach(track => track.stop());
       }
-      streamingService.disconnect();
+      if (contentType?.type === 'stream') {
+        // Use audioStreaming service for cleanup
+        console.log('ListenerPage - Cleaning up stream connection');
+        audioStreaming.disconnect();
+      }
     };
-  }, [streamId, navigate]);
+  }, [id, location.pathname, navigate]);
 
+  // Initialize audio element for live stream
   useEffect(() => {
-    if (audioRef.current && mediaStream) {
+    if (audioRef.current && mediaStream && contentType?.type === 'stream') {
       audioRef.current.srcObject = mediaStream;
       audioRef.current.play().catch(err => {
         setError('Failed to play audio: ' + err.message);
       });
     }
-  }, [mediaStream]);
+  }, [mediaStream, contentType]);
 
   const togglePlayPause = () => {
     if (audioRef.current) {
@@ -97,39 +153,90 @@ export function ListenerPage() {
     }
   };
 
-  const copyStreamLink = () => {
-    const streamUrl = window.location.href;
-    navigator.clipboard.writeText(streamUrl);
+  const copyShareLink = () => {
+    const shareUrl = window.location.href;
+    navigator.clipboard.writeText(shareUrl);
   };
 
+  // Subscribe to error events from AudioStreamingService
+  useEffect(() => {
+    audioStreaming.onError((errorMsg) => {
+      setError(errorMsg);
+      setLoading(false);
+    });
+    
+    return () => {
+      // Cleanup - no direct way to remove listeners from EventEmitter
+    };
+  }, []);
+
+  // Loading state
   if (loading) {
     return (
       <div className="min-h-[calc(100vh-8rem)] flex items-center justify-center p-4">
         <div className="text-center">
           <Loader2 className="h-12 w-12 text-indigo-500 animate-spin mx-auto mb-4" />
-          <p className="text-xl font-medium text-white mb-2">Connecting to stream...</p>
-          <p className="text-white/60">Please wait while we establish a connection</p>
+          <p className="text-xl font-medium text-white mb-2">
+            {location.pathname.startsWith('/stream/')
+              ? 'Connecting to stream...'
+              : 'Loading audio file...'}
+          </p>
+          <p className="text-white/60">Please wait while we prepare your audio</p>
         </div>
       </div>
     );
   }
 
+  // Error state
   if (error) {
     return (
       <div className="min-h-[calc(100vh-8rem)] flex items-center justify-center p-4">
         <div className="text-center">
           <AlertCircle className="h-12 w-12 text-red-400 mx-auto mb-4" />
           <p className="text-xl font-medium text-white mb-2">{error}</p>
-          <p className="text-white/60">
-            {error.includes('Stream not found') || error.includes('Stream has ended')
-              ? 'Redirecting to home page...'
-              : 'Please try refreshing the page'}
-          </p>
+          {error.includes('Signaling server') ? (
+            <div>
+              <p className="text-white/80 mb-4">
+                The streaming service requires a signaling server to be running at <code>http://localhost:3000</code>
+              </p>
+              <div className="bg-gray-800 p-4 rounded-lg text-left mb-4 max-w-xl mx-auto">
+                <p className="text-white font-mono text-sm mb-2">To set up the signaling server:</p>
+                <ol className="list-decimal list-inside text-white/70 space-y-1 text-sm">
+                  <li>Clone the signaling server: <code>git clone https://github.com/mixlnk/signaling-server.git</code></li>
+                  <li>Install dependencies: <code>cd signaling-server && npm install</code></li>
+                  <li>Start the server: <code>npm start</code></li>
+                </ol>
+              </div>
+            </div>
+          ) : (
+            <p className="text-white/60">
+              {error.includes('not found') || error.includes('has ended')
+                ? 'Redirecting to home page...'
+                : 'Please try refreshing the page'}
+            </p>
+          )}
         </div>
       </div>
     );
   }
 
+  // If we have an audio file, render the AudioFilePlayer component
+  if (contentType?.type === 'file' && audioFile && fileUrl) {
+    return (
+      <div className="min-h-[calc(100vh-8rem)] p-6">
+        <AudioFilePlayer 
+          fileUrl={fileUrl}
+          fileId={audioFile.id}
+          title={audioFile.title}
+          description={audioFile.description}
+          requiresApproval={audioFile.requires_approval}
+          isApproved={audioFile.approved}
+        />
+      </div>
+    );
+  }
+
+  // Otherwise, render the live stream player
   return (
     <div className="min-h-[calc(100vh-8rem)] flex justify-center items-center p-6">
       <div className="w-full max-w-6xl bg-gray-800 rounded-lg shadow-lg flex flex-col">
@@ -197,7 +304,7 @@ export function ListenerPage() {
                 />
               </div>
               <button
-                onClick={copyStreamLink}
+                onClick={copyShareLink}
                 className="mt-2 text-sm bg-indigo-600 px-4 py-2 rounded-lg hover:bg-indigo-500 transition flex items-center gap-2"
               >
                 <Share2 className="w-4 h-4" />

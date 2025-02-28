@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { loadStripe } from '@stripe/stripe-js';
 
 export type SubscriptionTier = 'free' | 'pro' | 'enterprise';
 
@@ -9,10 +8,7 @@ interface Subscription {
   tier: SubscriptionTier;
   status: 'active' | 'canceled' | 'expired';
   currentPeriodEnd: Date | null;
-  stripeSubscriptionId: string | null;
 }
-
-const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLIC_KEY);
 
 export function useSubscription() {
   const { user } = useAuth();
@@ -58,7 +54,7 @@ export function useSubscription() {
               tier: newSub.tier as SubscriptionTier,
               status: newSub.status,
               currentPeriodEnd: newSub.current_period_end ? new Date(newSub.current_period_end) : null,
-              stripeSubscriptionId: newSub.stripe_subscription_id
+  
             });
           }
         } else if (fetchError) {
@@ -68,7 +64,7 @@ export function useSubscription() {
             tier: data.tier as SubscriptionTier,
             status: data.status,
             currentPeriodEnd: data.current_period_end ? new Date(data.current_period_end) : null,
-            stripeSubscriptionId: data.stripe_subscription_id
+
           });
         }
       } catch (err) {
@@ -78,7 +74,7 @@ export function useSubscription() {
             tier: 'free',
             status: 'active',
             currentPeriodEnd: null,
-            stripeSubscriptionId: null
+
           });
         }
       } finally {
@@ -96,25 +92,35 @@ export function useSubscription() {
   }, [user]);
 
   const subscribe = async (tier: 'pro' | 'enterprise') => {
-    if (!user) throw new Error('User must be logged in to subscribe');
+    if (!user) {
+      setError('User must be logged in to subscribe');
+      return;
+    }
 
     try {
-      // Create a Stripe Checkout Session
-      const { data: { sessionId }, error } = await supabase
-        .functions.invoke('create-checkout-session', {
-          body: { tier, email: user.email }
-        });
+      const { data, error } = await supabase
+        .from('subscriptions')
+        .update({ 
+          tier,
+          status: 'active',
+          current_period_end: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) // 30 days from now
+        })
+        .eq('user_id', user.id)
+        .select()
+        .single();
 
       if (error) throw error;
-
-      // Redirect to Stripe Checkout
-      const stripe = await stripePromise;
-      if (!stripe) throw new Error('Failed to load Stripe');
-
-      const { error: stripeError } = await stripe.redirectToCheckout({ sessionId });
-      if (stripeError) throw stripeError;
+      
+      if (data) {
+        setSubscription({
+          tier: data.tier as SubscriptionTier,
+          status: data.status,
+          currentPeriodEnd: data.current_period_end ? new Date(data.current_period_end) : null
+        });
+      }
     } catch (err) {
-      console.error('Error creating checkout session:', err);
+      console.error('Error updating subscription:', err);
+      setError(err instanceof Error ? err.message : 'Failed to update subscription');
       throw err;
     }
   };
@@ -123,18 +129,27 @@ export function useSubscription() {
     if (!user) throw new Error('User must be logged in');
 
     try {
-      // Create a Stripe Customer Portal session
-      const { data: { url }, error } = await supabase
-        .functions.invoke('create-portal-session', {
-          body: { email: user.email }
-        });
+      const { data, error } = await supabase
+        .from('subscriptions')
+        .update({ 
+          status: 'canceled',
+          current_period_end: new Date() 
+        })
+        .eq('user_id', user.id)
+        .select()
+        .single();
 
       if (error) throw error;
-
-      // Redirect to Customer Portal
-      window.location.href = url;
+      
+      if (data) {
+        setSubscription({
+          tier: data.tier as SubscriptionTier,
+          status: data.status,
+          currentPeriodEnd: data.current_period_end ? new Date(data.current_period_end) : null
+        });
+      }
     } catch (err) {
-      console.error('Error creating portal session:', err);
+      console.error('Error canceling subscription:', err);
       throw err;
     }
   };

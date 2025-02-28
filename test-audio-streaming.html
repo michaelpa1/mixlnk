@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC Audio Streaming Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        .container {
+            display: flex;
+            gap: 20px;
+        }
+        .broadcaster, .listener {
+            flex: 1;
+            padding: 20px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+        h1, h2 {
+            color: #333;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin: 4px 2px;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .status {
+            margin-top: 20px;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .success {
+            background-color: #dff0d8;
+            color: #3c763d;
+        }
+        .error {
+            background-color: #f2dede;
+            color: #a94442;
+        }
+        .info {
+            background-color: #d9edf7;
+            color: #31708f;
+        }
+        .meter {
+            height: 20px;
+            position: relative;
+            background: #f3f3f3;
+            border-radius: 25px;
+            padding: 5px;
+            box-shadow: inset 0 -1px 1px rgba(255,255,255,0.3);
+            margin-top: 10px;
+        }
+        .meter > span {
+            display: block;
+            height: 100%;
+            border-radius: 20px;
+            background-color: rgb(43,194,83);
+            position: relative;
+            overflow: hidden;
+        }
+        .log {
+            height: 150px;
+            overflow-y: auto;
+            background-color: #f5f5f5;
+            padding: 10px;
+            font-family: monospace;
+            font-size: 12px;
+            margin-top: 20px;
+            border: 1px solid #ddd;
+        }
+    </style>
+</head>
+<body>
+    <h1>WebRTC Audio Streaming Test</h1>
+    <p>This page tests the WebRTC audio streaming functionality between a broadcaster and a listener.</p>
+    
+    <div class="container">
+        <div class="broadcaster">
+            <h2>Broadcaster</h2>
+            <div>
+                <label for="audioSource">Audio Source:</label>
+                <select id="audioSource"></select>
+            </div>
+            <div>
+                <button id="startBroadcast">Start Broadcasting</button>
+                <button id="stopBroadcast" disabled>Stop Broadcasting</button>
+            </div>
+            <div class="status" id="broadcasterStatus">
+                Ready to broadcast
+            </div>
+            <div class="meter">
+                <span id="broadcasterMeter" style="width: 0%"></span>
+            </div>
+            <div class="log" id="broadcasterLog"></div>
+        </div>
+        
+        <div class="listener">
+            <h2>Listener</h2>
+            <div>
+                <label for="streamId">Stream ID:</label>
+                <input type="text" id="streamId" placeholder="Enter stream ID">
+            </div>
+            <div>
+                <button id="connectToStream">Connect to Stream</button>
+                <button id="disconnectFromStream" disabled>Disconnect</button>
+            </div>
+            <div class="status" id="listenerStatus">
+                Ready to connect
+            </div>
+            <div class="meter">
+                <span id="listenerMeter" style="width: 0%"></span>
+            </div>
+            <div class="log" id="listenerLog"></div>
+        </div>
+    </div>
+    
+    <script src="https://cdn.socket.io/4.6.0/socket.io.min.js"></script>
+    <script>
+        // Configuration
+        const SIGNALING_SERVER_URL = 'http://localhost:3000';
+        
+        // DOM Elements
+        const audioSourceSelect = document.getElementById('audioSource');
+        const startBroadcastBtn = document.getElementById('startBroadcast');
+        const stopBroadcastBtn = document.getElementById('stopBroadcast');
+        const broadcasterStatus = document.getElementById('broadcasterStatus');
+        const broadcasterMeter = document.getElementById('broadcasterMeter');
+        const broadcasterLog = document.getElementById('broadcasterLog');
+        
+        const streamIdInput = document.getElementById('streamId');
+        const connectToStreamBtn = document.getElementById('connectToStream');
+        const disconnectFromStreamBtn = document.getElementById('disconnectFromStream');
+        const listenerStatus = document.getElementById('listenerStatus');
+        const listenerMeter = document.getElementById('listenerMeter');
+        const listenerLog = document.getElementById('listenerLog');
+        
+        // State variables
+        let broadcasterSocket = null;
+        let listenerSocket = null;
+        let localStream = null;
+        let remoteStream = null;
+        let currentStreamId = null;
+        let broadcasterPeerConnection = null;
+        let listenerPeerConnection = null;
+        let audioContext = null;
+        let broadcasterAnalyser = null;
+        let listenerAnalyser = null;
+        let broadcasterDataArray = null;
+        let listenerDataArray = null;
+        
+        // Logging functions
+        function logBroadcaster(message) {
+            const time = new Date().toLocaleTimeString();
+            broadcasterLog.innerHTML += `<div>[${time}] ${message}</div>`;
+            broadcasterLog.scrollTop = broadcasterLog.scrollHeight;
+        }
+        
+        function logListener(message) {
+            const time = new Date().toLocaleTimeString();
+            listenerLog.innerHTML += `<div>[${time}] ${message}</div>`;
+            listenerLog.scrollTop = listenerLog.scrollHeight;
+        }
+        
+        // Initialize audio context
+        function initAudioContext() {
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+        }
+        
+        // Get available audio devices
+        async function getAudioDevices() {
+            try {
+                // Make sure the select is enabled and clear it
+                audioSourceSelect.disabled = false;
+                audioSourceSelect.innerHTML = '';
+                
+                // Try to get devices with a fresh permission check
+                let stream = null;
+                try {
+                    // This ensures we have the most up-to-date device list with labels
+                    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    logBroadcaster('Microphone access confirmed');
+                } catch (err) {
+                    logBroadcaster(`Could not access microphone: ${err.message}`);
+                    // Add a placeholder option
+                    const option = document.createElement('option');
+                    option.value = '';
+                    option.text = 'Microphone access denied';
+                    option.disabled = true;
+                    option.selected = true;
+                    audioSourceSelect.appendChild(option);
+                    audioSourceSelect.disabled = true;
+                    return;
+                }
+                
+                // Now enumerate devices (this should have labels since we have permission)
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const audioDevices = devices.filter(device => device.kind === 'audioinput');
+                
+                // Stop the temporary stream
+                if (stream) {
+                    stream.getTracks().forEach(track => track.stop());
+                }
+                
+                // Check if we have any audio devices
+                if (audioDevices.length === 0) {
+                    logBroadcaster('No audio input devices found');
+                    const option = document.createElement('option');
+                    option.value = '';
+                    option.text = 'No audio devices available';
+                    option.disabled = true;
+                    audioSourceSelect.appendChild(option);
+                    audioSourceSelect.disabled = true;
+                    return;
+                }
+                
+                // Log all found devices for debugging
+                audioDevices.forEach((device, index) => {
+                    logBroadcaster(`Device ${index+1}: ${device.label || 'Unknown'} (${device.deviceId.substring(0, 8)}...)`);
+                });
+                
+                // Add default option
+                const defaultOption = document.createElement('option');
+                defaultOption.value = '';
+                defaultOption.text = 'Default Microphone';
+                defaultOption.selected = true;
+                audioSourceSelect.appendChild(defaultOption);
+                
+                // Add all available devices
+                let deviceCount = 0;
+                audioDevices.forEach((device, index) => {
+                    // Add all devices, even if they don't have proper labels
+                    if (true) {  // Changed from: if (device.label)
+                        deviceCount++;
+                        const option = document.createElement('option');
+                        option.value = device.deviceId;
+                        
+                        // Clean up the label if needed
+                        let label = device.label;
+                        if (label.toLowerCase().includes('default')) {
+                            label = `Default (${label})`;
+                        }
+                        
+                        option.text = label || `Microphone ${index + 1}`;
+                        audioSourceSelect.appendChild(option);
+                    }
+                });
+                
+                logBroadcaster(`Added ${deviceCount} selectable audio devices to dropdown`);
+                // Instead of replacing the select element, just make sure it's enabled
+                audioSourceSelect.disabled = false;
+                
+                // Add event listener to the existing select element
+                audioSourceSelect.addEventListener('change', (e) => {
+                    const selectedOption = audioSourceSelect.options[audioSourceSelect.selectedIndex];
+                    logBroadcaster(`Selected device: ${selectedOption.text}`);
+                });
+                
+            } catch (error) {
+                logBroadcaster(`Error getting audio devices: ${error.message}`);
+                
+                // Add a fallback option
+                audioSourceSelect.innerHTML = '';
+                const option = document.createElement('option');
+                option.value = '';
+                option.text = 'Error loading devices';
+                option.disabled = true;
+                audioSourceSelect.appendChild(option);
+            }
+        }
+        
+        // Initialize broadcaster
+        async function initBroadcaster() {
+            try {
+                // First check if we already have permission by checking for device labels
+                logBroadcaster('Checking microphone permissions...');
+                
+                // Try to enumerate devices without requesting permission
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const audioDevices = devices.filter(device => device.kind === 'audioinput');
+                
+                // Check if we have labels (indicates permission was already granted)
+                const hasLabels = audioDevices.some(device => device.label && device.label.length > 0);
+                
+                if (hasLabels) {
+                    // We already have permission, load devices directly
+                    logBroadcaster('Microphone permission already granted');
+                    await getAudioDevices();
+                    return;
+                }
+                
+                // We don't have permission yet, show the permission button
+                logBroadcaster('Microphone permission needed. Please click the button below.');
+                
+                // Create a prominent button for microphone access
+                const permissionContainer = document.createElement('div');
+                permissionContainer.style.marginBottom = '15px';
+                permissionContainer.style.textAlign = 'center';
+                permissionContainer.id = 'mic-permission-container';
+                
+                const requestPermissionBtn = document.createElement('button');
+                requestPermissionBtn.textContent = 'Allow Microphone Access';
+                requestPermissionBtn.style.backgroundColor = '#4CAF50';
+                requestPermissionBtn.style.color = 'white';
+                requestPermissionBtn.style.padding = '10px 15px';
+                requestPermissionBtn.style.border = 'none';
+                requestPermissionBtn.style.borderRadius = '4px';
+                requestPermissionBtn.style.cursor = 'pointer';
+                requestPermissionBtn.style.fontSize = '16px';
+                requestPermissionBtn.id = 'mic-permission-button';
+                
+                requestPermissionBtn.onclick = async () => {
+                    try {
+                        requestPermissionBtn.textContent = 'Requesting access...';
+                        requestPermissionBtn.disabled = true;
+                        logBroadcaster('Requesting microphone permission...');
+                        
+                        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                        logBroadcaster('Permission granted! Loading devices...');
+                        
+                        // Keep the stream active for a moment to ensure permissions are properly registered
+                        setTimeout(() => {
+                            stream.getTracks().forEach(track => track.stop());
+                            document.getElementById('mic-permission-container')?.remove();
+                            getAudioDevices();
+                        }, 500);
+                    } catch (err) {
+                        logBroadcaster(`Permission request failed: ${err.message}`);
+                        requestPermissionBtn.textContent = 'Retry Microphone Access';
+                        requestPermissionBtn.disabled = false;
+                    }
+                };
+                
+                permissionContainer.appendChild(requestPermissionBtn);
+                
+                // Insert the container before the audio source select
+                const selectContainer = audioSourceSelect.parentNode;
+                selectContainer.insertBefore(permissionContainer, audioSourceSelect);
+                
+                // Clear the select and add a placeholder
+                audioSourceSelect.innerHTML = '';
+                const option = document.createElement('option');
+                option.value = '';
+                option.text = 'Click the green button above';
+                option.disabled = true;
+                option.selected = true;
+                audioSourceSelect.appendChild(option);
+            } catch (error) {
+                logBroadcaster(`Error initializing: ${error.message}`);
+                broadcasterStatus.textContent = 'Error: ' + error.message;
+                broadcasterStatus.className = 'status error';
+            }
+        }
+        
+        // Start broadcasting
+        async function startBroadcasting() {
+            try {
+                // Disable the button during the process
+                startBroadcastBtn.disabled = true;
+                startBroadcastBtn.textContent = 'Starting...';
+                
+                initAudioContext();
+                
+                // Check if the permission button is still visible
+                if (document.getElementById('mic-permission-container')) {
+                    logBroadcaster('Please allow microphone access first');
+                    broadcasterStatus.textContent = 'Error: Click the green "Allow Microphone Access" button first';
+                    broadcasterStatus.className = 'status error';
+                    startBroadcastBtn.disabled = false;
+                    startBroadcastBtn.textContent = 'Start Broadcasting';
+                    return;
+                }
+                
+                // Get selected audio device
+                const deviceId = audioSourceSelect.value;
+                const selectedOption = audioSourceSelect.options[audioSourceSelect.selectedIndex];
+                
+                // Show status
+                broadcasterStatus.textContent = 'Accessing microphone...';
+                broadcasterStatus.className = 'status info';
+                
+                // Log the selected device
+                if (deviceId) {
+                    logBroadcaster(`Using microphone: ${selectedOption?.text || deviceId}`);
+                } else {
+                    logBroadcaster('Using default microphone');
+                }
+                
+                try {
+                    // Get audio stream with specific constraints
+                    const constraints = {
+                        audio: {
+                            deviceId: deviceId ? { exact: deviceId } : undefined,
+                            echoCancellation: false,
+                            noiseSuppression: false,
+                            autoGainControl: false
+                        }
+                    };
+                    
+                    logBroadcaster(`Requesting stream with constraints: ${JSON.stringify(constraints)}`);
+                    localStream = await navigator.mediaDevices.getUserMedia(constraints);
+                    
+                    // Log the tracks we got
+                    localStream.getTracks().forEach(track => {
+                        logBroadcaster(`Got track: ${track.kind}, enabled: ${track.enabled}, id: ${track.id}`);
+                    });
+                    
+                    logBroadcaster('Microphone access granted successfully');
+                } catch (micError) {
+                    logBroadcaster(`Failed to access microphone: ${micError.message}`);
+                    broadcasterStatus.textContent = `Error: ${micError.message}`;
+                    broadcasterStatus.className = 'status error';
+                    startBroadcastBtn.disabled = false;
+                    startBroadcastBtn.textContent = 'Start Broadcasting';
+                    return;
+                }
+                
+                // Set up audio analyser
+                const source = audioContext.createMediaStreamSource(localStream);
+                broadcasterAnalyser = audioContext.createAnalyser();
+                broadcasterAnalyser.fftSize = 256;
+                source.connect(broadcasterAnalyser);
+                
+                const bufferLength = broadcasterAnalyser.frequencyBinCount;
+                broadcasterDataArray = new Uint8Array(bufferLength);
+                
+                // Connect to signaling server
+                broadcasterSocket = io(SIGNALING_SERVER_URL);
+                
+                broadcasterSocket.on('connect', () => {
+                    logBroadcaster('Connected to signaling server');
+                    
+                    // Generate stream ID
+                    currentStreamId = Math.random().toString(36).substring(2, 10);
+                    
+                    // Register stream
+                    broadcasterSocket.emit('register-stream', { streamId: currentStreamId });
+                    
+                    logBroadcaster(`Stream registered with ID: ${currentStreamId}`);
+                    broadcasterStatus.textContent = `Broadcasting with ID: ${currentStreamId}`;
+                    broadcasterStatus.className = 'status success';
+                    
+                    // Update UI
+                    startBroadcastBtn.disabled = true;
+                    stopBroadcastBtn.disabled = false;
+                    streamIdInput.value = currentStreamId;
+                });
+                
+                broadcasterSocket.on('connect_error', (error) => {
+                    logBroadcaster(`Connection error: ${error.message}`);
+                    broadcasterStatus.textContent = 'Connection error: ' + error.message;
+                    broadcasterStatus.className = 'status error';
+                });
+                
+                // Handle join-stream-request
+                broadcasterSocket.on('join-stream-request', async (data) => {
+                    logBroadcaster(`Received join request from listener: ${data.listenerId}`);
+                    
+                    // Create peer connection
+                    broadcasterPeerConnection = new RTCPeerConnection({
+                        iceServers: [
+                            { urls: 'stun:stun.l.google.com:19302' },
+                            { urls: 'stun:stun1.l.google.com:19302' },
+                            { urls: 'stun:stun2.l.google.com:19302' },
+                            { urls: 'stun:stun3.l.google.com:19302' },
+                            { urls: 'stun:stun4.l.google.com:19302' },
+                            {
+                                urls: 'turn:openrelay.metered.ca:80',
+                                username: 'openrelayproject',
+                                credential: 'openrelayproject'
+                            },
+                            {
+                                urls: 'turn:openrelay.metered.ca:443',
+                                username: 'openrelayproject',
+                                credential: 'openrelayproject'
+                            }
+                        ],
+                        iceCandidatePoolSize: 10
+                    });
+                    
+                    // Add local stream tracks to peer connection
+                    localStream.getTracks().forEach(track => {
+                        logBroadcaster(`Adding track to peer connection: ${track.kind}`);
+                        broadcasterPeerConnection.addTrack(track.clone(), localStream);
+                    });
+                    
+                    // Handle ICE candidates
+                    broadcasterPeerConnection.onicecandidate = (event) => {
+                        if (event.candidate) {
+                            logBroadcaster('Sending ICE candidate to listener');
+                            broadcasterSocket.emit('ice-candidate', {
+                                listenerId: data.listenerId,
+                                candidate: event.candidate
+                            });
+                        }
+                    };
+                    
+                    // Create and send offer
+                    try {
+                        const offer = await broadcasterPeerConnection.createOffer();
+                        await broadcasterPeerConnection.setLocalDescription(offer);
+                        
+                        logBroadcaster('Sending offer to listener');
+                        broadcasterSocket.emit('offer', {
+                            listenerId: data.listenerId,
+                            offer: offer
+                        });
+                    } catch (error) {
+                        logBroadcaster(`Error creating offer: ${error.message}`);
+                    }
+                });
+                
+                // Handle answer from listener
+                broadcasterSocket.on('answer', async (data) => {
+                    logBroadcaster(`Received answer from listener: ${data.userId}`);
+                    
+                    try {
+                        await broadcasterPeerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+                        logBroadcaster('Remote description set successfully');
+                    } catch (error) {
+                        logBroadcaster(`Error setting remote description: ${error.message}`);
+                    }
+                });
+                
+                // Handle ICE candidates from listener
+                broadcasterSocket.on('ice-candidate', async (data) => {
+                    if (broadcasterPeerConnection) {
+                        try {
+                            logBroadcaster('Received ICE candidate from listener');
+                            await broadcasterPeerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+                        } catch (error) {
+                            logBroadcaster(`Error adding ICE candidate: ${error.message}`);
+                        }
+                    }
+                });
+                
+                // Start audio level visualization
+                visualizeBroadcasterAudio();
+                
+            } catch (error) {
+                logBroadcaster(`Error starting broadcast: ${error.message}`);
+                broadcasterStatus.textContent = 'Error: ' + error.message;
+                broadcasterStatus.className = 'status error';
+            }
+        }
+        
+        // Stop broadcasting
+        function stopBroadcasting() {
+            // Stop local stream
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
+            }
+            
+            // Close peer connection
+            if (broadcasterPeerConnection) {
+                broadcasterPeerConnection.close();
+                broadcasterPeerConnection = null;
+            }
+            
+            // Disconnect from signaling server
+            if (broadcasterSocket) {
+                if (currentStreamId) {
+                    broadcasterSocket.emit('end-stream', { streamId: currentStreamId });
+                }
+                broadcasterSocket.disconnect();
+                broadcasterSocket = null;
+            }
+            
+            // Update UI
+            currentStreamId = null;
+            startBroadcastBtn.disabled = false;
+            stopBroadcastBtn.disabled = true;
+            broadcasterStatus.textContent = 'Ready to broadcast';
+            broadcasterStatus.className = 'status';
+            broadcasterMeter.style.width = '0%';
+            
+            logBroadcaster('Broadcasting stopped');
+        }
+        
+        // Connect to stream as listener
+        async function connectToStream() {
+            try {
+                initAudioContext();
+                
+                const streamId = streamIdInput.value.trim();
+                if (!streamId) {
+                    throw new Error('Please enter a stream ID');
+                }
+                
+                listenerStatus.textContent = 'Connecting...';
+                listenerStatus.className = 'status info';
+                
+                // Connect to signaling server
+                listenerSocket = io(SIGNALING_SERVER_URL);
+                
+                listenerSocket.on('connect', () => {
+                    logListener('Connected to signaling server');
+                    
+                    // Request to join stream
+                    const listenerId = Math.random().toString(36).substring(2, 10);
+                    listenerSocket.emit('join-stream-request', {
+                        streamId: streamId,
+                        listenerId: listenerId
+                    });
+                    
+                    logListener(`Requested to join stream: ${streamId}`);
+                });
+                
+                listenerSocket.on('connect_error', (error) => {
+                    logListener(`Connection error: ${error.message}`);
+                    listenerStatus.textContent = 'Connection error: ' + error.message;
+                    listenerStatus.className = 'status error';
+                });
+                
+                // Create peer connection
+                listenerPeerConnection = new RTCPeerConnection({
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:stun1.l.google.com:19302' },
+                        { urls: 'stun:stun2.l.google.com:19302' },
+                        { urls: 'stun:stun3.l.google.com:19302' },
+                        { urls: 'stun:stun4.l.google.com:19302' },
+                        {
+                            urls: 'turn:openrelay.metered.ca:80',
+                            username: 'openrelayproject',
+                            credential: 'openrelayproject'
+                        },
+                        {
+                            urls: 'turn:openrelay.metered.ca:443',
+                            username: 'openrelayproject',
+                            credential: 'openrelayproject'
+                        }
+                    ],
+                    iceCandidatePoolSize: 10
+                });
+                
+                // Handle incoming tracks
+                listenerPeerConnection.ontrack = (event) => {
+                    logListener('Received audio track from broadcaster');
+                    remoteStream = new MediaStream();
+                    event.streams[0].getTracks().forEach(track => {
+                        remoteStream.addTrack(track);
+                    });
+                    
+                    // Create audio element to play the stream
+                    const audioElement = new Audio();
+                    audioElement.srcObject = remoteStream;
+                    audioElement.play();
+                    
+                    // Set up audio analyser for visualization
+                    const source = audioContext.createMediaStreamSource(remoteStream);
+                    listenerAnalyser = audioContext.createAnalyser();
+                    listenerAnalyser.fftSize = 256;
+                    source.connect(listenerAnalyser);
+                    
+                    const bufferLength = listenerAnalyser.frequencyBinCount;
+                    listenerDataArray = new Uint8Array(bufferLength);
+                    
+                    // Start audio level visualization
+                    visualizeListenerAudio();
+                    
+                    // Update UI
+                    listenerStatus.textContent = `Connected to stream: ${streamId}`;
+                    listenerStatus.className = 'status success';
+                    connectToStreamBtn.disabled = true;
+                    disconnectFromStreamBtn.disabled = false;
+                };
+                
+                // Handle ICE candidates
+                listenerPeerConnection.onicecandidate = (event) => {
+                    if (event.candidate && listenerSocket) {
+                        logListener('Sending ICE candidate to broadcaster');
+                        listenerSocket.emit('ice-candidate', {
+                            streamId: streamId,
+                            candidate: event.candidate
+                        });
+                    }
+                };
+                
+                // Handle connection state changes
+                listenerPeerConnection.onconnectionstatechange = () => {
+                    logListener(`Connection state: ${listenerPeerConnection.connectionState}`);
+                    
+                    if (listenerPeerConnection.connectionState === 'connected') {
+                        listenerStatus.textContent = `Connected to stream: ${streamId}`;
+                        listenerStatus.className = 'status success';
+                    } else if (listenerPeerConnection.connectionState === 'failed') {
+                        listenerStatus.textContent = 'Connection failed';
+                        listenerStatus.className = 'status error';
+                    }
+                };
+                
+                // Handle offer from broadcaster
+                listenerSocket.on('offer', async (data) => {
+                    logListener('Received offer from broadcaster');
+                    
+                    try {
+                        await listenerPeerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+                        
+                        const answer = await listenerPeerConnection.createAnswer();
+                        await listenerPeerConnection.setLocalDescription(answer);
+                        
+                        logListener('Sending answer to broadcaster');
+                        listenerSocket.emit('answer', {
+                            streamId: streamId,
+                            listenerId: data.listenerId,
+                            answer: answer
+                        });
+                    } catch (error) {
+                        logListener(`Error handling offer: ${error.message}`);
+                    }
+                });
+                
+                // Handle ICE candidates from broadcaster
+                listenerSocket.on('ice-candidate', async (data) => {
+                    if (listenerPeerConnection) {
+                        try {
+                            logListener('Received ICE candidate from broadcaster');
+                            await listenerPeerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+                        } catch (error) {
+                            logListener(`Error adding ICE candidate: ${error.message}`);
+                        }
+                    }
+                });
+                
+                // Handle stream ended
+                listenerSocket.on('stream-ended', () => {
+                    logListener('Stream has ended');
+                    disconnectFromStream();
+                });
+                
+            } catch (error) {
+                logListener(`Error connecting to stream: ${error.message}`);
+                listenerStatus.textContent = 'Error: ' + error.message;
+                listenerStatus.className = 'status error';
+            }
+        }
+        
+        // Disconnect from stream
+        function disconnectFromStream() {
+            // Stop remote stream
+            if (remoteStream) {
+                remoteStream.getTracks().forEach(track => track.stop());
+                remoteStream = null;
+            }
+            
+            // Close peer connection
+            if (listenerPeerConnection) {
+                listenerPeerConnection.close();
+                listenerPeerConnection = null;
+            }
+            
+            // Disconnect from signaling server
+            if (listenerSocket) {
+                listenerSocket.disconnect();
+                listenerSocket = null;
+            }
+            
+            // Update UI
+            connectToStreamBtn.disabled = false;
+            disconnectFromStreamBtn.disabled = true;
+            listenerStatus.textContent = 'Ready to connect';
+            listenerStatus.className = 'status';
+            listenerMeter.style.width = '0%';
+            
+            logListener('Disconnected from stream');
+        }
+        
+        // Visualize broadcaster audio levels
+        function visualizeBroadcasterAudio() {
+            if (!broadcasterAnalyser) return;
+            
+            broadcasterAnalyser.getByteFrequencyData(broadcasterDataArray);
+            
+            // Calculate average level
+            let sum = 0;
+            for (let i = 0; i < broadcasterDataArray.length; i++) {
+                sum += broadcasterDataArray[i];
+            }
+            const average = sum / broadcasterDataArray.length;
+            
+            // Update meter
+            const level = Math.min(100, Math.max(0, average * 100 / 256));
+            broadcasterMeter.style.width = level + '%';
+            
+            // Call again on next animation frame
+            if (localStream) {
+                requestAnimationFrame(visualizeBroadcasterAudio);
+            }
+        }
+        
+        // Visualize listener audio levels
+        function visualizeListenerAudio() {
+            if (!listenerAnalyser) return;
+            
+            listenerAnalyser.getByteFrequencyData(listenerDataArray);
+            
+            // Calculate average level
+            let sum = 0;
+            for (let i = 0; i < listenerDataArray.length; i++) {
+                sum += listenerDataArray[i];
+            }
+            const average = sum / listenerDataArray.length;
+            
+            // Update meter
+            const level = Math.min(100, Math.max(0, average * 100 / 256));
+            listenerMeter.style.width = level + '%';
+            
+            // Call again on next animation frame
+            if (remoteStream) {
+                requestAnimationFrame(visualizeListenerAudio);
+            }
+        }
+        
+        // Event listeners
+        startBroadcastBtn.addEventListener('click', startBroadcasting);
+        stopBroadcastBtn.addEventListener('click', stopBroadcasting);
+        connectToStreamBtn.addEventListener('click', connectToStream);
+        disconnectFromStreamBtn.addEventListener('click', disconnectFromStream);
+        
+        // Initialize
+        initBroadcaster();
+    </script>
+</body>
+</html>

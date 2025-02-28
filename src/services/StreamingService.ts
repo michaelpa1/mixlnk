@@ -87,8 +87,13 @@ export class StreamingService {
   }
 
   private isValidUUID(uuid: string): boolean {
+    // Check for standard UUID format (for backward compatibility)
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-    return uuidRegex.test(uuid);
+    
+    // Also check for alphanumeric IDs (format used by AudioStreamingService)
+    const alphaNumericIdRegex = /^[a-z0-9]{8}$/i;
+    
+    return uuidRegex.test(uuid) || alphaNumericIdRegex.test(uuid);
   }
 
   async connectToStream(streamId: string): Promise<MediaStream> {

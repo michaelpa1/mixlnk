@@ -1,0 +1,26 @@
+version: '3'
+
+services:
+  signaling-server:
+    build: ./signaling-server
+    ports:
+      - "3000:3000"
+    networks:
+      - mixlnk-network
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_SIGNALING_SERVER_URL=http://signaling-server:3000
+    depends_on:
+      - signaling-server
+    networks:
+      - mixlnk-network
+
+networks:
+  mixlnk-network:
+    driver: bridge

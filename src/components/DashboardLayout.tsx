@@ -2,14 +2,15 @@ import React, { useEffect, useState } from 'react';
 import { Link, useLocation, Outlet } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
-import { 
+import {
   AudioWaveform as Waveform,
   Radio,
   Users,
   Settings,
   LogOut,
   User2,
-  Loader2
+  Loader2,
+  FileAudio
 } from 'lucide-react';
 
 interface NavItemProps {
@@ -79,22 +80,28 @@ export function DashboardLayout() {
         {/* Navigation */}
         <nav className="flex-1 space-y-2">
           <NavItem
-            to="/broadcast"
+            to="/dashboard/broadcast"
             icon={<Radio className="h-5 w-5" />}
             label="Broadcast"
-            isActive={isActivePath('/broadcast')}
+            isActive={isActivePath('/dashboard/broadcast')}
           />
           <NavItem
-            to="/listeners"
+            to="/dashboard/files"
+            icon={<FileAudio className="h-5 w-5" />}
+            label="Files"
+            isActive={isActivePath('/dashboard/files')}
+          />
+          <NavItem
+            to="/dashboard/listeners"
             icon={<Users className="h-5 w-5" />}
             label="Listeners"
-            isActive={isActivePath('/listeners')}
+            isActive={isActivePath('/dashboard/listeners')}
           />
           <NavItem
-            to="/settings"
+            to="/dashboard/settings"
             icon={<Settings className="h-5 w-5" />}
             label="Settings"
-            isActive={isActivePath('/settings')}
+            isActive={isActivePath('/dashboard/settings')}
           />
         </nav>
 

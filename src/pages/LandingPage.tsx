@@ -2,7 +2,7 @@ import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSubscription } from '../hooks/useSubscription';
-import { 
+import {
   AudioWaveform as Waveform,
   Radio,
   Users,
@@ -16,7 +16,8 @@ import {
   Check,
   Clock,
   QrCode,
-  Infinity
+  Infinity,
+  User2
 } from 'lucide-react';
 
 interface PricingTierProps {
@@ -101,13 +102,13 @@ export function LandingPage() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-24">
           <div className="text-center">
             <h1 className="text-4xl sm:text-6xl font-bold text-white mb-6">
-              Your Stream, Your Sound,{' '}
+              Stop waiting. Start creating.{' '}
               <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-500 to-purple-500">
-                Your Rules
+                Get instant approvals on audio & video.
               </span>
             </h1>
             <p className="text-xl text-white/60 mb-8 max-w-2xl mx-auto">
-              Stream high-quality audio live to your audience—effortlessly. Free for casual users, affordable for pros.
+              Upload. Share. Get instant feedback. No more waiting for slow approvals or hunting down comments—MixLnk makes collaboration seamless.
             </p>
             <div className="flex items-center justify-center gap-4">
               <button
@@ -192,14 +193,14 @@ export function LandingPage() {
             <PricingTier
               name="Free"
               price="$0"
-              description="Perfect for casual streamers"
+              description="Perfect for casual users"
               features={[
                 "30 minutes weekly streaming",
                 "2 concurrent listeners",
                 "Standard audio quality",
                 "Basic analytics"
               ]}
-              cta="Start Streaming"
+              cta="Try it FREE—Get Feedback Now"
               onSelect={handleStartStreaming}
             />
 
@@ -215,7 +216,7 @@ export function LandingPage() {
                 "Priority support"
               ]}
               popular
-              cta="Upgrade Now"
+              cta="Go Pro & Stop Wasting Time"
               onSelect={handleUpgradeClick}
             />
 
@@ -230,9 +231,43 @@ export function LandingPage() {
                 "Custom integrations",
                 "24/7 support"
               ]}
-              cta="Contact Sales"
+              cta="Level Up Your Workflow"
               onSelect={handleUpgradeClick}
             />
+          </div>
+
+          {/* Testimonials Section */}
+          <div className="mt-24 max-w-4xl mx-auto">
+            <div className="text-center mb-12">
+              <h2 className="text-3xl font-bold mb-4">What Our Users Say</h2>
+              <p className="text-white/60">Real feedback from real professionals</p>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+              <div className="bg-white/5 rounded-xl p-6 backdrop-blur-sm border border-white/10">
+                <p className="text-lg mb-4">"MixLnk cut our approval time in HALF. No more 'Can you hear this?' emails!"</p>
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-full bg-indigo-500/20 flex items-center justify-center">
+                    <User2 className="h-5 w-5 text-indigo-500" />
+                  </div>
+                  <div>
+                    <p className="font-medium">Alex Thompson</p>
+                    <p className="text-sm text-white/60">Senior Audio Engineer</p>
+                  </div>
+                </div>
+              </div>
+              <div className="bg-white/5 rounded-xl p-6 backdrop-blur-sm border border-white/10">
+                <p className="text-lg mb-4">"Getting feedback used to be a nightmare. MixLnk is stupidly easy."</p>
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-full bg-indigo-500/20 flex items-center justify-center">
+                    <User2 className="h-5 w-5 text-indigo-500" />
+                  </div>
+                  <div>
+                    <p className="font-medium">Sarah Chen</p>
+                    <p className="text-sm text-white/60">Video Producer</p>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
